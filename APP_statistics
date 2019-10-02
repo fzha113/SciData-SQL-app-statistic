@@ -1,0 +1,239 @@
+BEGIN
+
+
+##### 平台号  ######
+SET @source_code=(
+    SELECT
+        borrow_source_code
+    FROM
+        AGGREGATE_PROJECT
+    LIMIT 1
+);
+
+
+##### 累积借款额  #####
+SET @accumulate_invest_money=(
+SELECT
+    SUM(borrow_plan_raise_amount)
+FROM
+    AGGREGATE_PROJECT);
+
+
+##### 累积借款人数(笔数)  #####
+SET @accumulate_borrow_num=(
+SELECT
+    COUNT(borrow_batch_num)
+FROM
+    AGGREGATE_PROJECT);
+
+
+##### 累积投资额  #####
+SET @accumulate_invest=(
+SELECT
+    SUM(invest_trans_money)
+FROM
+    AGGREGATE_PROJECT);
+
+
+##### 累积投资人数(笔数)  #####
+SET @accumulate_invest_num=(
+SELECT
+    SUM(investor_num)
+FROM
+    AGGREGATE_PROJECT);
+
+##### 累积还款额  #####
+SET @accumulate_repay_money=(
+SELECT
+    SUM(repay_capital_money+repay_interest_money)
+FROM
+    AGGREGATE_PROJECT);
+
+
+##### 累积还款人数(笔数)  #####
+SET @accumulate_repay_num=(
+SELECT
+    COUNT(1)
+FROM
+    AGGREGATE_PROJECT
+WHERE 
+    repayment_source_financing_code is not NULL);
+
+##### 累积还款本金  #####
+SET @accumulate_capital_money=(
+SELECT
+    SUM(CASE WHEN repay_capital_money IS NULL THEN 0 ELSE repay_capital_money END)
+FROM
+    AGGREGATE_PROJECT
+);
+
+
+##### 逾期金额 #####
+
+SET @overdue_money = (
+SELECT
+    CASE WHEN sum(borrow_plan_raise_amount) IS NULL THEN 0 ELSE sum(borrow_plan_raise_amount) END
+FROM
+    AGGREGATE_PROJECT
+WHERE
+        #上边界
+    now() >  
+    DATE_ADD(str_to_date(invest_start_time,'%Y-%m-%d %H:%i:%s'),
+                        INTERVAL +(0+(case when borrow_term_type='年' then 360 * borrow_term
+                                                             when borrow_term_type='月' then borrow_term *30 else borrow_term end)) DAY) and 
+
+    #下边界
+    str_to_date(invest_start_time,'%Y-%m-%d %H:%i:%s') < 
+    DATE_ADD(   str_to_date(invest_start_time,'%Y-%m-%d %H:%i:%s'),
+                        INTERVAL +(0+(case when borrow_term_type='年' then 360 * borrow_term 
+                                                             when borrow_term_type='月' then borrow_term *30 else borrow_term end)) DAY
+                    ) AND
+
+        invest_trans_money > (repay_capital_money + CASE WHEN repay_interest_money IS NULL THEN 0 ELSE repay_interest_money END)
+);
+
+
+
+
+####### 未来60天待还本息 ######
+SET @futureDays60 = (
+SELECT
+    SUM(case 
+        when borrow_term_type='年' then 360 * borrow_term
+        when borrow_term_type='月' then borrow_term *30 else borrow_term 
+    end*invest_trans_money/365*borrow_rate+invest_trans_money)
+FROM
+    AGGREGATE_PROJECT
+WHERE
+    DATE_ADD(NOW(),INTERVAL 60 DAY) > DATE_ADD(str_to_date(invest_start_time,'%Y-%m-%d %H:%i:%s'),
+        INTERVAL (case 
+                    when borrow_term_type='年' then 360 * borrow_term
+                    when borrow_term_type='月' then borrow_term *30 else borrow_term 
+                end) DAY) 
+    AND
+    NOW() > DATE_ADD(str_to_date(invest_start_time,'%Y-%m-%d %H:%i:%s'),
+        INTERVAL (case 
+                    when borrow_term_type='年' then 360 * borrow_term
+                    when borrow_term_type='月' then borrow_term *30 else borrow_term 
+                end) DAY));
+
+
+######  最近60天成功投资金额  ######
+#现在日期在开标日期起60天以内的
+SET @beforeDays60 = (
+SELECT
+    SUM(case 
+        when borrow_term_type='年' then 360 * borrow_term
+        when borrow_term_type='月' then borrow_term *30 else borrow_term 
+    end*invest_trans_money/365*borrow_rate+invest_trans_money)
+FROM
+    AGGREGATE_PROJECT
+WHERE
+    DATE_ADD(NOW(),INTERVAL -60 DAY) < DATE_ADD(str_to_date(invest_start_time,'%Y-%m-%d %H:%i:%s'),
+                INTERVAL (case 
+                            when borrow_term_type='年' then 360 * borrow_term
+                            when borrow_term_type='月' then borrow_term *30 else borrow_term 
+                        end) DAY) AND
+    NOW() > DATE_ADD(str_to_date(invest_start_time,'%Y-%m-%d %H:%i:%s'),
+                INTERVAL (case 
+                            when borrow_term_type='年' then 360 * borrow_term
+                            when borrow_term_type='月' then borrow_term *30 else borrow_term 
+                        end) DAY) );
+
+
+
+######  注册资金  ######
+
+SET @registered_fund = 77017016;
+
+
+
+#########################################################################################################################
+
+######  累积交易总额  ######
+SET @accumulate_trans_moeny = @accumulate_invest_money + @accumulate_repay_money;
+SELECT @accumulate_trans_moeny;
+
+
+######  累积交易总笔数 ######
+SET @accumulate_trans_num = @accumulate_invest_num + @accumulate_repay_num;
+SELECT @accumulate_trans_num;
+
+
+######  借贷余额  ######
+SET @loan_balance = @accumulate_invest_money - @accumulate_capital_money;
+SELECT @loan_balance;
+
+######  累积投资人数   ######
+# 一次流水就是一个人发生的,投资笔数就是投资人数
+SELECT @accumulate_invest_num;
+
+
+######  平均投资额   ######
+SET @average_invest_money = @accumulate_invest/@accumulate_invest_num;
+SELECT @average_invest_money;
+
+
+######  加权平均利率   ######
+SET @average_rate=(
+SELECT
+    sum(borrow_plan_raise_amount*borrow_rate)/sum(borrow_plan_raise_amount)
+FROM
+    AGGREGATE_PROJECT);
+SELECT @average_rate;
+
+######  累积借款人数   ######
+SELECT @accumulate_borrow_num;
+
+
+######  平均借款额   ######
+SET @average_borrow_money = @accumulate_invest_money/@accumulate_borrow_num;
+SELECT @average_borrow_money;
+
+######  M3逾期率   ######
+
+SET @overdue = @overdue_money/@accumulate_trans_moeny;
+SELECT @overdue;
+
+
+
+
+
+######  杠杆率  ######
+SET @lever_ratio = @overdue/@registered_fund;
+
+######## 资金流动性 ###########
+SET @financial_liquidity = @futureDays60/@beforeDays60;
+
+####################################    插入表     ###############################################33
+
+CREATE TABLE IF NOT EXISTS `app_statistics` (
+  `commit_time` varchar(20) NOT NULL DEFAULT '0000-00-00 00:00:00' COMMENT '提交时间',
+  `source_code` longtext COMMENT '累积交易总额',
+  `accumulate_trans_moeny` double DEFAULT NULL COMMENT '累积交易总额',
+  `accumulate_trans_num` decimal(65,0) DEFAULT NULL COMMENT '累积交易总笔数',
+  `loan_balance` double DEFAULT NULL COMMENT '借贷余额',
+  `accumulate_invest_num` decimal(65,0) DEFAULT NULL COMMENT '累积投资人数',
+  `average_invest_money` double DEFAULT NULL COMMENT '平均投资额',
+  `average_rate` double DEFAULT NULL COMMENT '加权平均利率',
+  `accumulate_borrow_num` bigint(20) DEFAULT NULL COMMENT '累积借款人数',
+  `average_borrow_money` double DEFAULT NULL COMMENT '平均借款额',
+  `over_due` double DEFAULT NULL,
+  `lever_ratio` double(20,0) DEFAULT NULL COMMENT '杠杆率',
+  `financial_liquidity` double(20,0) DEFAULT NULL COMMENT '资金流动性'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+
+
+
+
+INSERT INTO app_statistics
+SELECT  NOW() as commit_time,@source_code,@accumulate_trans_moeny,@accumulate_trans_num,@loan_balance,
+                @accumulate_invest_num,@average_invest_money,@average_rate,
+                @accumulate_borrow_num,@average_borrow_money,@overdue,@lever_ratio,@financial_liquidity;
+
+
+
+
+
+END
